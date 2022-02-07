@@ -1,0 +1,187 @@
+docker-compose -f helk-kibana-notebook-analysis-basic.yml
+
+0516ede91fecca7a75a87d73aede5409fd6bfb3a424ea1fb
+
+helk:hunting
+
+https://192.168.75.129/app/kibana
+https://192.168.75.129/jupyter
+
+http://192.168.75.129:8080
+
+https://towardsdatascience.com/customizing-networkx-graphs-f80b4e69bedf
+
+
+
+import networkx as nx
+gp = nx.from_pandas_edgelist(edges.toPandas(),'src','dst')
+
+nx.draw(gp, with_labels=True, node_size=10, font_size=8,  width=0.75)
+
+
+
+
+###### graphX psark!!
+from pyspark.sql import SparkSession
+import networkx as nx
+import matplotlib.pyplot as plt
+from graphframes import *
+from pyspark.sql.functions import *
+
+spark = SparkSession.builder \
+    .appName("HELK Graphs") \
+    .master("spark://helk-spark-master:7077") \
+    .enableHiveSupport() \
+    .getOrCreate()
+
+es_reader = (spark.read
+    .format("org.elasticsearch.spark.sql")
+    .option("inferSchema", "true")
+    .option("es.read.field.as.array.include", "tags")
+    .option("es.nodes","helk-elasticsearch:9200")
+    .option("es.net.http.auth.user","elastic")
+)
+sysmon_df = es_reader.load("logs-endpoint-winevent-sysmon-*/")
+
+vertices = (sysmon_df
+    .filter(sysmon_df.action == "processcreate")
+    .select(
+        "@timestamp",
+        "process_guid",
+        "process_parent_guid",
+        "user_name",
+        "host_name",
+        "process_name",
+        "action",
+        "process_integrity_level",
+        "process_parent_command_line",
+        "event_id"
+    )
+    .withColumn("relationship", lit("spawned"))
+)
+
+vertices.show(5,truncate=False)
+
+gp = nx.from_pandas_edgelist(vertices.toPandas(),'process_parent_guid','process_guid', create_using=nx.MultiDiGraph())
+
+plt.figure(figsize=(50,50))
+nx.draw(gp, with_labels=True, font_size=8, node_size=20)
+
+
+gp = nx.from_pandas_edgelist(vertices.toPandas(),'process_parent_guid','process_guid')
+gps = list((gp.subgraph(c) for c in nx.connected_components(gp)))
+
+for i, sg in enumerate(gps):
+    print("subgraph {} has {} nodes".format(i, sg.number_of_nodes()))
+    print("\tNodes:", sg.nodes(data=True))
+    print("\tEdges:", sg.edges())
+
+    
+    plt.figure(figsize=(50,50))
+    nx.draw(sg, with_labels=True, font_size=8, node_size=20)
+
+
+
+
+
+## GET data elastic
+mkdir ~/data
+wget -O ~/data/logs-endpoint-winevent-security.json --post-data='{ "from": 0, "size": 10000, "query": { "match_all": {} }}' --header='Content-Type:application/json' http://192.168.75.129:9200/logs-endpoint-winevent-security-*/_search
+wget -O ~/data/logs-endpoint-winevent-wmiactivity.json --post-data='{ "from": 0, "size": 10000, "query": { "match_all": {} }}' --header='Content-Type:application/json' http://192.168.75.129:9200/logs-endpoint-winevent-wmiactivity-*/_search
+wget -O ~/data/logs-endpoint-winevent-application.json --post-data='{ "from": 0, "size": 10000, "query": { "match_all": {} }}' --header='Content-Type:application/json' http://192.168.75.129:9200/logs-endpoint-winevent-application-*/_search
+wget -O ~/data/logs-endpoint-winevent-powershell.json --post-data='{ "from": 0, "size": 10000, "query": { "match_all": {} }}' --header='Content-Type:application/json' http://192.168.75.129:9200/logs-endpoint-winevent-powershell-*/_search
+wget -O ~/data/logs-endpoint-winevent-sysmon.json --post-data='{ "from": 0, "size": 10000, "query": { "match_all": {} }}' --header='Content-Type:application/json' http://192.168.75.129:9200/logs-endpoint-winevent-sysmon-*/_search
+
+wget -O ~/data/logs-endpoint-winevent-system.json --post-data='{ "from": 0, "size": 10000, "query": { "match_all": {} }}' --header='Content-Type:application/json' http://192.168.75.129:9200/logs-endpoint-winevent-system-*/_search
+
+
+wc -c ~/data/*.json
+scp vagrant@192.168.75.129:~/data/*.json .\Documents\perso\esgi\fyc\data\
+
+
+iptables -t nat -A DOCKER -p tcp --dport 9200 -j DNAT --to-destination 172.18.0.9:9200
+iptables -t nat -A POSTROUTING -j MASQUERADE -p tcp --source 172.18.0.9 --destination 172.18.0.9 --dport 9200
+iptables -A DOCKER -j ACCEPT -p tcp --destination 172.18.0.9 --dport 9200
+
+
+
+## une video acces a jupyter (prise en main)
+
+
+
+## Mettre en place les donné de esdata.tar dans uen volume docker_esdata
+CI apres la commande à utiliser
+docker run --rm \
+  --volume docker_esdata:/tmp/data \
+  --volume $(pwd):/tmp/backup \
+  ubuntu \
+  sh -c 'tar xvf /tmp/backup/esdata.tar -C /tmp --strip 1 && chown -R 1000:0 /tmp/data/*'
+
+
+
+## Combien y a t il d evenement total
+21 805
+
+## Combien y a t il d evenement sysmon ?
+1    2032
+2 User investigation
+    user_account:"vagrant"
+    combine d event sur dc par vagrant ?
+    combien de creation de fichier reporté
+    combien de creation de téléchargement
+    Y a il eu des tentative de command potentiellement dangereuse executer ? (telechargement, dump lsass, mimikatz, Avez vosu pu voire d autre test potentiellement dangeureux)
+        "Invoke-WebRequest"
+            Powersploit
+            Nopack
+            Mimikatz
+        "lsass" and not process_path:"c:\windows\system32\lsass.exe"
+        "github.com"
+        "Mimikatz"
+    
+    l invocation de mimikatz a t elle creer un process ?
+        L'invocation de la commande a t elle fonctionné d apres vous?    
+
+    ces actions sont realisé sur quel host ?
+        win10
+Detcrection de nopac
+target_user_new_name
+
+    Nopac a t il cree des evenement réseaux
+        OUI e7d664ec-112c-61e7-6400-000000000a00 (rubeus)
+
+Certian telechargement ont il pu passé a trvaers les maille du filet ?
+    oui, "Invoke-WebRequest"
+
+
+
+## Est il normal qu il y est deux utilisateur avec des nom similaire, dc et dc$ ?
+    Nom, c est potentiellement representant de NoPaC
+
+## Quel sont les evenements en relation avec dc (nombre et type)
+    user_name.keyword: "dc"
+    2, TGT
+
+Reperer les evenement l'utilisation de function d import powershell dangereuse
+Invoke-NoPaC
+
+## Nombre d event en raport avec la creation d un spn pour l attaque nopac (event lié au DC)
+"TestSPN" and not _index:"logs-endpoint-winevent-powershell-*"Test
+
+## Proposer une regle de dététction nopack dans le context suivant (event lié au DC):
+noms des dc:
+    - DC
+
+target_user_new_name:"dc" and "_index":"logs-endpoint-winevent-security-*"
+
+
+## AVez vous vu coment nopack  il était ajouté dans le contect powershell, d ou vient le code en question ?
+"Invoke-noPac" and "Invoke-WebRequest"
+
+
+
+
+
+
+ docker exec -it helk-jupyter bash
+
+ jupyter notebook list
